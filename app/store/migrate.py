@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
+from app.config.settings import (
+    DATABASE_PATH,
+    MIGRATIONS_DIR,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
-DATA_DIR = PROJECT_ROOT / "data"
-DATABASE_PATH = DATA_DIR / "agent.db"
+
+
+
+logger = logging.getLogger("qq-agent.migrate")
 
 
 def configure_connection(db: sqlite3.Connection) -> None:
@@ -16,10 +21,10 @@ def configure_connection(db: sqlite3.Connection) -> None:
     db.execute("PRAGMA busy_timeout=5000;")
 
 
-def migrate() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def migrate(database_path: Path = DATABASE_PATH) -> None:
+    database_path.parent.mkdir(parents=True, exist_ok=True)
 
-    db = sqlite3.connect(DATABASE_PATH)
+    db = sqlite3.connect(database_path)
 
     try:
         configure_connection(db)
@@ -45,7 +50,7 @@ def migrate() -> None:
             if already_applied:
                 continue
 
-            print(f"Applying {version}")
+            logger.info("Applying %s", version)
 
             sql = path.read_text(encoding="utf-8")
             safe_version = version.replace("'", "''")
@@ -68,7 +73,7 @@ def migrate() -> None:
                     db.rollback()
                 raise
 
-        print(f"Database ready: {DATABASE_PATH}")
+        logger.info("Database ready: %s", database_path)
 
     finally:
         db.close()

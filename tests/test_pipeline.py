@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,74 +8,12 @@ from app.adapter.onebot.normalizer import normalize_message_event
 from app.dispatcher.dispatcher import DispatchItem
 from app.dispatcher.pipeline import MessagePipeline
 from app.store.database import Database
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
-
-
-def make_private_payload(
-    *,
-    message_id: int,
-    text: str,
-) -> dict:
-    return {
-        "post_type": "message",
-        "message_type": "private",
-        "self_id": 10001,
-        "user_id": 20002,
-        "message_id": message_id,
-        "time": 1700000000 + message_id,
-        "raw_message": text,
-        "message": [
-            {
-                "type": "text",
-                "data": {
-                    "text": text,
-                },
-            }
-        ],
-    }
-
-
-def make_group_payload(
-    *,
-    message_id: int,
-    text: str,
-    mention_bot: bool = False,
-) -> dict:
-    segments: list[dict] = []
-
-    if mention_bot:
-        segments.append(
-            {
-                "type": "at",
-                "data": {
-                    "qq": "10001",
-                },
-            }
-        )
-
-    segments.append(
-        {
-            "type": "text",
-            "data": {
-                "text": text,
-            },
-        }
-    )
-
-    return {
-        "post_type": "message",
-        "message_type": "group",
-        "self_id": 10001,
-        "user_id": 20002,
-        "group_id": 30003,
-        "message_id": message_id,
-        "time": 1700000000 + message_id,
-        "raw_message": text,
-        "message": segments,
-    }
+from app.store.migrate import migrate
+from tests.support import (
+    make_group_payload,
+    make_private_payload,
+    open_database,
+)
 
 
 class PipelineTest(
@@ -90,17 +27,7 @@ class PipelineTest(
             / "agent-test.db"
         )
 
-        with sqlite3.connect(
-            self.database_path
-        ) as db:
-            for migration in sorted(
-                MIGRATIONS_DIR.glob("*.sql")
-            ):
-                db.executescript(
-                    migration.read_text(
-                        encoding="utf-8"
-                    )
-                )
+        migrate(self.database_path)
 
         self.database = Database(
             self.database_path
@@ -158,7 +85,7 @@ class PipelineTest(
             )
         )
 
-        with sqlite3.connect(
+        with open_database(
             self.database_path
         ) as db:
             state = db.execute(
@@ -237,7 +164,7 @@ class PipelineTest(
             )
         )
 
-        with sqlite3.connect(
+        with open_database(
             self.database_path
         ) as db:
             state = db.execute(
@@ -291,7 +218,7 @@ class PipelineTest(
             )
         )
 
-        with sqlite3.connect(
+        with open_database(
             self.database_path
         ) as db:
             state = db.execute(
@@ -403,7 +330,7 @@ class PipelineTest(
 
         await self.database.start()
 
-        with sqlite3.connect(
+        with open_database(
             self.database_path
         ) as db:
             states = dict(
@@ -441,7 +368,7 @@ class PipelineTest(
             )
         )
 
-        with sqlite3.connect(
+        with open_database(
             self.database_path
         ) as db:
             row = db.execute(
@@ -473,7 +400,7 @@ class PipelineTest(
             )
         )
 
-        with sqlite3.connect(
+        with open_database(
             self.database_path
         ) as db:
             conversation_count = db.execute(

@@ -206,22 +206,10 @@ class OneBotActionChannel:
             )
 
         except TimeoutError as exc:
-            self._pending.pop(
-                echo,
-                None,
-            )
-
             raise ActionOutcomeUnknown(
                 "Timed out waiting for "
                 "OneBot action response"
             ) from exc
-
-        except ActionOutcomeUnknown:
-            self._pending.pop(
-                echo,
-                None,
-            )
-            raise
 
         finally:
             self._pending.pop(

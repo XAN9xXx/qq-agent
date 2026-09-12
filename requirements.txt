@@ -1,0 +1,6 @@
+# Direct runtime dependencies only.
+# Pinned to the versions running on the Debian host (Python 3.13.5).
+# Everything else in the venv (attrs, multidict, yarl, frozenlist, ...)
+# is a transitive dependency of these two.
+aiohttp==3.14.3
+aiosqlite==0.22.1

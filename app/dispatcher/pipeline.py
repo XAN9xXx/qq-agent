@@ -149,7 +149,10 @@ class MessagePipeline:
             )
 
             await self._handle_local_command(
-                event
+                event,
+                conversation_id=(
+                    conversation_id
+                ),
             )
 
         except Exception:
@@ -165,6 +168,8 @@ class MessagePipeline:
     async def _handle_local_command(
         self,
         event: NormalizedMessageEvent,
+        *,
+        conversation_id: str,
     ) -> None:
         command = extract_plain_text(
             event
@@ -173,34 +178,113 @@ class MessagePipeline:
         if command != "/ping":
             return
 
+        await self._send_reply(
+            event,
+            conversation_id=conversation_id,
+            text="pong",
+        )
+
+    async def _send_reply(
+        self,
+        event: NormalizedMessageEvent,
+        *,
+        conversation_id: str,
+        text: str,
+    ) -> None:
+        attempt_id = (
+            await self._database
+            .begin_outbound_attempt(
+                conversation_id=conversation_id,
+                source_event_key=(
+                    event.dedup_key
+                ),
+                text=text,
+            )
+        )
+
         if self._message_port is None:
             logger.warning(
-                "/ping received but "
-                "MessagePort is unavailable"
+                "Reply not dispatched: "
+                "MessagePort is unavailable, "
+                "attempt=%s",
+                attempt_id,
             )
+
+            await self._finish_attempt(
+                attempt_id,
+                SendStatus.NOT_DISPATCHED,
+            )
+
             return
 
-        result = (
-            await self._message_port.send_text(
-                scope_type=event.scope_type,
-                scope_external_id=(
-                    event.scope_external_id
-                ),
-                text="pong",
+        try:
+            result = (
+                await self._message_port.send_text(
+                    scope_type=event.scope_type,
+                    scope_external_id=(
+                        event.scope_external_id
+                    ),
+                    text=text,
+                )
             )
+
+        except Exception:
+            # An unexpected error leaves the outcome unprovable, so
+            # record it as unknown rather than as a failure that
+            # something could later decide to retry.
+            await self._finish_attempt(
+                attempt_id,
+                SendStatus.UNKNOWN_OUTCOME,
+            )
+
+            raise
+
+        await self._finish_attempt(
+            attempt_id,
+            result.status,
+            external_message_id=(
+                result.external_message_id
+            ),
+            retcode=result.retcode,
         )
 
         if result.status == SendStatus.SENT:
             logger.info(
-                "/ping reply sent: "
+                "Reply sent: "
+                "attempt=%s "
                 "external_message_id=%s",
+                attempt_id,
                 result.external_message_id,
             )
+
             return
 
         logger.error(
-            "/ping reply failed: "
-            "status=%s retcode=%s",
+            "Reply failed: "
+            "attempt=%s "
+            "status=%s "
+            "retcode=%s",
+            attempt_id,
             result.status.value,
             result.retcode,
+        )
+
+    async def _finish_attempt(
+        self,
+        attempt_id: str,
+        status: SendStatus,
+        *,
+        external_message_id: str | None = None,
+        retcode: int | None = None,
+    ) -> None:
+        await (
+            self._database
+            .finish_outbound_attempt(
+                attempt_id,
+                status=status.value,
+                external_message_id=(
+                    external_message_id
+                ),
+                retcode=retcode,
+            )
         )

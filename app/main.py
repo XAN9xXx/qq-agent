@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import weakref
-from datetime import datetime, timezone
-from pathlib import Path
 
 from aiohttp import WSCloseCode, WSMsgType, web
 
@@ -17,6 +16,10 @@ from app.adapter.onebot.message_port import (
 from app.adapter.onebot.normalizer import (
     normalize_message_event,
 )
+from app.config.settings import (
+    DATA_DIR,
+    load_onebot_access_token,
+)
 from app.dispatcher.dispatcher import (
     ConversationDispatcher,
     DispatchItem,
@@ -28,11 +31,9 @@ from app.dispatcher.pipeline import (
 from app.store.database import (
     Database,
 )
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = PROJECT_ROOT / "data"
-RAW_EVENT_LOG = DATA_DIR / "onebot-events.jsonl"
+from app.store.migrate import (
+    migrate,
+)
 
 
 WEBSOCKETS: web.AppKey[
@@ -68,6 +69,13 @@ MESSAGE_PORT: web.AppKey[
 ] = web.AppKey(
     "message_port",
     MessagePort,
+)
+
+ACCESS_TOKEN: web.AppKey[
+    str
+] = web.AppKey(
+    "access_token",
+    str,
 )
 
 
@@ -115,34 +123,6 @@ async def health_handler(
     )
 
 
-def append_raw_event(
-    payload: dict,
-) -> None:
-    received_at = (
-        datetime.now(
-            timezone.utc
-        ).isoformat()
-    )
-
-    record = {
-        "received_at": received_at,
-        "payload": payload,
-    }
-
-    with RAW_EVENT_LOG.open(
-        "a",
-        encoding="utf-8",
-    ) as file:
-        file.write(
-            json.dumps(
-                record,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        )
-        file.write("\n")
-
-
 async def handle_onebot_event(
     request: web.Request,
     payload: dict,
@@ -155,10 +135,6 @@ async def handle_onebot_event(
         payload.get("post_type"),
         payload.get("message_id"),
         payload.get("time"),
-    )
-
-    append_raw_event(
-        payload
     )
 
     try:
@@ -281,9 +257,87 @@ async def handle_onebot_event(
             )
 
 
+def _extract_access_token(
+    request: web.Request,
+) -> str | None:
+    header = request.headers.get(
+        "Authorization"
+    )
+
+    if header:
+        scheme, _, value = header.partition(
+            " "
+        )
+
+        if scheme.lower() != "bearer":
+            return None
+
+        return value.strip() or None
+
+    # OneBot v11 allows the query parameter only where the client
+    # cannot set request headers.
+    return request.query.get(
+        "access_token",
+        "",
+    ).strip() or None
+
+
 async def onebot_ws_handler(
     request: web.Request,
 ) -> web.WebSocketResponse:
+    peer = request.remote
+
+    presented = _extract_access_token(
+        request
+    )
+
+    expected = request.app[
+        ACCESS_TOKEN
+    ]
+
+    # Both sides are encoded so that a non-ASCII token does not make
+    # compare_digest() raise instead of comparing.
+    if (
+        presented is None
+        or not hmac.compare_digest(
+            presented.encode("utf-8"),
+            expected.encode("utf-8"),
+        )
+    ):
+        logger.warning(
+            "Rejected OneBot WebSocket: "
+            "missing or invalid access token, "
+            "peer=%s",
+            peer,
+        )
+
+        raise web.HTTPUnauthorized(
+            headers={
+                "WWW-Authenticate": "Bearer"
+            }
+        )
+
+    action_channel = request.app[
+        ACTION_CHANNEL
+    ]
+
+    # NapCat runs exactly one reverse WebSocket client, so a second
+    # concurrent connection is never legitimate. Refusing it stops a
+    # later connection from taking over the action channel.
+    #
+    # Cost of this choice: a half-open socket keeps `closed` False
+    # until the 30s heartbeat reaps it, so an ungraceful drop can make
+    # NapCat's first reconnect attempt fail before one succeeds.
+    if action_channel.connected:
+        logger.warning(
+            "Rejected OneBot WebSocket: "
+            "a connection is already active, "
+            "peer=%s",
+            peer,
+        )
+
+        raise web.HTTPConflict()
+
     ws = web.WebSocketResponse(
         heartbeat=30,
         max_msg_size=(
@@ -299,15 +353,9 @@ async def onebot_ws_handler(
         WEBSOCKETS
     ].add(ws)
 
-    action_channel = request.app[
-        ACTION_CHANNEL
-    ]
-
     action_channel.attach(
         ws
     )
-
-    peer = request.remote
 
     logger.info(
         "OneBot WebSocket connected: "
@@ -506,12 +554,18 @@ async def cleanup_services(
 
 
 def create_app() -> web.Application:
+    access_token = (
+        load_onebot_access_token()
+    )
+
     DATA_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
     app = web.Application()
+
+    app[ACCESS_TOKEN] = access_token
 
     app[WEBSOCKETS] = (
         weakref.WeakSet()
@@ -543,6 +597,8 @@ def create_app() -> web.Application:
 
 
 def main() -> None:
+    migrate()
+
     web.run_app(
         create_app(),
         host="0.0.0.0",

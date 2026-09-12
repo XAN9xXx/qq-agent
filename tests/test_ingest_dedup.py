@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
 from app.adapter.onebot.normalizer import normalize_message_event
 from app.store.database import Database
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
+from app.store.migrate import migrate
+from tests.support import open_database
 
 
 PAYLOAD = {
@@ -45,17 +42,7 @@ class IngestDedupTest(
             / "agent-test.db"
         )
 
-        with sqlite3.connect(
-            self.database_path
-        ) as db:
-            for migration in sorted(
-                MIGRATIONS_DIR.glob("*.sql")
-            ):
-                db.executescript(
-                    migration.read_text(
-                        encoding="utf-8"
-                    )
-                )
+        migrate(self.database_path)
 
         self.database = Database(
             self.database_path
@@ -102,7 +89,7 @@ class IngestDedupTest(
             second.accepted
         )
 
-        with sqlite3.connect(
+        with open_database(
             self.database_path
         ) as db:
             inbound_count = db.execute(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -10,10 +11,12 @@ from pathlib import Path
 import aiosqlite
 
 from app.adapter.onebot.models import NormalizedMessageEvent
+from app.config.settings import DATABASE_PATH
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATABASE_PATH = PROJECT_ROOT / "data" / "agent.db"
+logger = logging.getLogger(
+    "qq-agent.database"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,17 +105,17 @@ class Database:
                 raise
 
             if inbound_cursor.rowcount > 0:
-                print(
-                    "Recovered "
-                    f"{inbound_cursor.rowcount} "
-                    "abandoned inbound event(s)"
+                logger.info(
+                    "Recovered %d abandoned "
+                    "inbound event(s)",
+                    inbound_cursor.rowcount,
                 )
 
             if outbound_cursor.rowcount > 0:
-                print(
-                    "Recovered "
-                    f"{outbound_cursor.rowcount} "
-                    "unknown outbound attempt(s)"
+                logger.info(
+                    "Recovered %d unknown "
+                    "outbound attempt(s)",
+                    outbound_cursor.rowcount,
                 )
 
         except Exception:
@@ -371,6 +374,10 @@ class Database:
                     )
                 )
 
+                now = int(
+                    time.time()
+                )
+
                 await db.execute(
                     """
                     INSERT INTO messages (
@@ -381,11 +388,13 @@ class Database:
                         source_event_key,
                         text,
                         segments_json,
-                        created_at
+                        created_at,
+                        occurred_at
                     )
                     VALUES (
                         ?,
                         'inbound',
+                        ?,
                         ?,
                         ?,
                         ?,
@@ -405,12 +414,9 @@ class Database:
                             ensure_ascii=False,
                             separators=(",", ":"),
                         ),
+                        now,
                         event.occurred_at,
                     ),
-                )
-
-                now = int(
-                    time.time()
                 )
 
                 await db.execute(
@@ -621,7 +627,8 @@ class Database:
                             source_event_key,
                             text,
                             segments_json,
-                            created_at
+                            created_at,
+                            occurred_at
                         )
                         VALUES (
                             ?,
@@ -631,7 +638,8 @@ class Database:
                             ?,
                             ?,
                             NULL,
-                            ?
+                            ?,
+                            NULL
                         )
                         """,
                         (

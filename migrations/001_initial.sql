@@ -1,5 +1,3 @@
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE actors (
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL,

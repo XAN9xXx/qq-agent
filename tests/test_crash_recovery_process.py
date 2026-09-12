@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -9,12 +8,11 @@ import unittest
 from pathlib import Path
 
 from app.adapter.onebot.normalizer import normalize_message_event
+from app.config.settings import PROJECT_ROOT
 from app.store.database import Database
+from app.store.migrate import migrate
 from tests.crash_worker import PAYLOAD
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
+from tests.support import open_database
 
 
 @unittest.skipUnless(
@@ -33,17 +31,7 @@ class CrashRecoveryProcessTest(
                 / "agent-crash-test.db"
             )
 
-            with sqlite3.connect(
-                database_path
-            ) as db:
-                for migration in sorted(
-                    MIGRATIONS_DIR.glob("*.sql")
-                ):
-                    db.executescript(
-                        migration.read_text(
-                            encoding="utf-8"
-                        )
-                    )
+            migrate(database_path)
 
             result = subprocess.run(
                 [
@@ -73,7 +61,7 @@ class CrashRecoveryProcessTest(
 
             assert event is not None
 
-            with sqlite3.connect(
+            with open_database(
                 database_path
             ) as db:
                 state_before_restart = db.execute(
@@ -100,7 +88,7 @@ class CrashRecoveryProcessTest(
 
             await database.close()
 
-            with sqlite3.connect(
+            with open_database(
                 database_path
             ) as db:
                 state_after_restart = db.execute(
